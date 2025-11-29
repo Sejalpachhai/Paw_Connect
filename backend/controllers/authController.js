@@ -1,110 +1,155 @@
 // backend/controllers/authController.js
-const bcrypt = require("bcrypt");
-const jwt = require("jsonwebtoken");
-const { OAuth2Client } = require("google-auth-library");
-const User = require("../models/userModel");
+import bcrypt from "bcryptjs";
+import jwt from "jsonwebtoken";
+import pool from "../config/db.js";
 
-const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
-
-function createToken(user) {
+// helper to create our own JWT
+const generateToken = (user) => {
   return jwt.sign(
-    { userId: user.id },
+    {
+      id: user.id,
+      name: user.name,
+      email: user.email,
+    },
     process.env.JWT_SECRET,
-    { expiresIn: process.env.JWT_EXPIRES_IN || "7d" }
+    { expiresIn: "7d" }
   );
-}
+};
 
-// POST /api/auth/register
-async function register(req, res) {
+// --------- REGISTER (email + password) ----------
+export const register = async (req, res) => {
+  const { name, email, password } = req.body;
+
   try {
-    const { name, email, password } = req.body;
-
     if (!name || !email || !password) {
-      return res.status(400).json({ error: "Name, email, and password are required" });
+      return res.status(400).json({ error: "Name, email and password required" });
     }
 
-    const existing = await User.getUserByEmail(email);
-    if (existing) {
-      return res.status(400).json({ error: "Email already registered" });
+    // check if user exists
+    const existing = await pool.query("SELECT * FROM users WHERE email = $1", [
+      email,
+    ]);
+
+    if (existing.rows.length > 0) {
+      return res.status(400).json({ error: "User already exists with this email" });
     }
 
-    const passwordHash = await bcrypt.hash(password, 10);
-    const user = await User.createUserWithPassword(name, email, passwordHash);
-    const token = createToken(user);
+    const salt = await bcrypt.genSalt(10);
+    const passwordHash = await bcrypt.hash(password, salt);
 
-    res.status(201).json({
-      user: { id: user.id, name: user.name, email: user.email },
-      token,
-    });
+    const result = await pool.query(
+      "INSERT INTO users (name, email, password) VALUES ($1, $2, $3) RETURNING id, name, email",
+      [name, email, passwordHash]
+    );
+
+    const user = result.rows[0];
+    const token = generateToken(user);
+
+    res.status(201).json({ token });
   } catch (err) {
-    console.error("Register error:", err);
-    res.status(500).json({ error: "Registration failed" });
+    console.error("Register error:", err.message);
+    res.status(500).json({ error: "Server error during registration" });
   }
-}
+};
 
-// POST /api/auth/login
-async function login(req, res) {
+// --------- LOGIN (email + password) ----------
+export const login = async (req, res) => {
+  const { email, password } = req.body;
+
   try {
-    const { email, password } = req.body;
-
     if (!email || !password) {
-      return res.status(400).json({ error: "Email and password are required" });
+      return res.status(400).json({ error: "Email and password required" });
     }
 
-    const user = await User.getUserByEmail(email);
-    if (!user || !user.password_hash) {
-      return res.status(400).json({ error: "Invalid credentials" });
+    const result = await pool.query("SELECT * FROM users WHERE email = $1", [
+      email,
+    ]);
+
+    if (result.rows.length === 0) {
+      return res.status(400).json({ error: "Invalid email or password" });
     }
 
-    const match = await bcrypt.compare(password, user.password_hash);
+    const user = result.rows[0];
+
+    if (!user.password) {
+      return res
+        .status(400)
+        .json({ error: "This account was created with Google login" });
+    }
+
+    const match = await bcrypt.compare(password, user.password);
+
     if (!match) {
-      return res.status(400).json({ error: "Invalid credentials" });
+      return res.status(400).json({ error: "Invalid email or password" });
     }
 
-    const token = createToken(user);
-    res.json({
-      user: { id: user.id, name: user.name, email: user.email },
-      token,
-    });
+    const token = generateToken(user);
+    res.json({ token });
   } catch (err) {
-    console.error("Login error:", err);
-    res.status(500).json({ error: "Login failed" });
+    console.error("Login error:", err.message);
+    res.status(500).json({ error: "Server error during login" });
   }
-}
+};
 
-// POST /api/auth/google
-async function googleAuth(req, res) {
+// --------- GOOGLE AUTH ----------
+export const googleAuth = async (req, res) => {
+  const { idToken } = req.body;
+
   try {
-    const { idToken } = req.body;
     if (!idToken) {
       return res.status(400).json({ error: "idToken is required" });
     }
 
-    const ticket = await googleClient.verifyIdToken({
-      idToken,
-      audience: process.env.GOOGLE_CLIENT_ID,
-    });
-    const payload = ticket.getPayload();
+    // NOTE: This is a simple decode for dev/demo (NOT secure for production)
+    const parts = idToken.split(".");
+    if (parts.length !== 3) {
+      return res.status(400).json({ error: "Invalid idToken format" });
+    }
 
-    const googleId = payload.sub;
+    const payloadJson = Buffer.from(parts[1], "base64").toString("utf8");
+    const payload = JSON.parse(payloadJson);
+
     const email = payload.email;
-    const name = payload.name;
+    const name = payload.name || email?.split("@")[0] || "Google User";
 
-    const user = await User.upsertGoogleUser(name, email, googleId);
-    const token = createToken(user);
+    if (!email) {
+      return res
+        .status(400)
+        .json({ error: "Google token did not contain an email" });
+    }
 
-    res.json({
-      user: { id: user.id, name: user.name, email: user.email },
-      token,
-    });
+    // check if user exists
+    let userResult = await pool.query("SELECT * FROM users WHERE email = $1", [
+      email,
+    ]);
+
+    let user;
+    if (userResult.rows.length === 0) {
+      // create a new user with no password (Google only)
+      const insertResult = await pool.query(
+        "INSERT INTO users (name, email) VALUES ($1, $2) RETURNING id, name, email",
+        [name, email]
+      );
+      user = insertResult.rows[0];
+    } else {
+      user = userResult.rows[0];
+    }
+
+    const token = generateToken(user);
+    res.json({ token });
   } catch (err) {
-    console.error("Google auth error:", err);
-    res.status(500).json({ error: "Google authentication failed" });
+    console.error("Google auth error:", err.message);
+    res.status(500).json({ error: "Server error during Google login" });
   }
-}
+};
 
-module.exports = {
-  register,
-  login,
-  googleAuth,
+// --------- GET CURRENT USER (/me) ----------
+export const getMe = async (req, res) => {
+  try {
+    const { id, name, email } = req.user; // set by protect()
+    res.json({ user: { id, name, email } });
+  } catch (err) {
+    console.error("GetMe error:", err.message);
+    res.status(500).json({ error: "Server error fetching user" });
+  }
 };

@@ -15,7 +15,7 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: "Echoes Of Nepal",
-  description: "Adventure, routes, AI-powered suggestions inside Nepal",
+  description: "Echoes Of Nepal – routes, rides & stories",
 };
 
 export default function RootLayout({

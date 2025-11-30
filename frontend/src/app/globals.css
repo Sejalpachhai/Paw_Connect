@@ -237,40 +237,30 @@ body {
 }
 
 /* Divider + Google button UNDER the forms */
-
 .eon-divider-row {
-  margin-top: 1.2rem;
   display: flex;
   align-items: center;
-  gap: 0.6rem;
+  justify-content: center;
+  margin: 1.5rem 0 1rem;
 }
 
 .eon-divider-line {
-  flex: 1;
   height: 1px;
-  background: rgba(55, 65, 81, 0.8);
+  width: 100%;
+  max-width: 80px;
+  background: #4b5563;
+  opacity: 0.4;
 }
 
 .eon-divider-text {
+  margin: 0 0.8rem;
   font-size: 0.75rem;
-  letter-spacing: 0.05em;
+  color: #9ca3af;
   text-transform: uppercase;
-  color: #6b7280;
+  letter-spacing: 0.12em;
 }
 
-.eon-google-under {
-  margin-top: 0.7rem;
-  margin-bottom: 0.5rem;
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  min-height: 40px; /* space reserved for Google button */
-}
 
-.eon-google-fallback {
-  font-size: 0.8rem;
-  color: #6b7280;
-}
 
 /* Small helpers (optional) */
 

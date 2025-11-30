@@ -1,10 +1,10 @@
 "use client";
 
-import {
+import React, {
   createContext,
   useContext,
-  useEffect,
   useState,
+  useEffect,
   ReactNode,
 } from "react";
 
@@ -17,95 +17,75 @@ type User = {
 type AuthContextType = {
   user: User | null;
   loading: boolean;
-  loginWithToken: (token: string) => void;
+  refreshUser: () => Promise<void>;
   logout: () => void;
 };
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-async function fetchMe(token: string): Promise<User | null> {
-  try {
-    const res = await fetch("http://localhost:5000/api/auth/me", {
-      headers: {
-        Authorization: `Bearer ${token}`,
-      },
-    });
-
-    if (!res.ok) {
-      throw new Error("Not authorized");
-    }
-
-    const data = await res.json();
-    return data.user;
-  } catch (err) {
-    console.error("fetchMe error:", err);
-    return null;
-  }
-}
-
-export function AuthProvider({ children }: { children: ReactNode }) {
+export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
 
-  // On first load, check if we already have a token
-  useEffect(() => {
-    const token =
-      typeof window !== "undefined"
+  // 🔁 This function talks to backend /api/auth/me
+  const refreshUser = async () => {
+    try {
+      const token = typeof window !== "undefined"
         ? localStorage.getItem("token")
         : null;
 
-    if (!token) {
-      setLoading(false);
-      return;
-    }
-
-    (async () => {
-      const me = await fetchMe(token);
-      if (!me) {
-        localStorage.removeItem("token");
+      if (!token) {
+        setUser(null);
+        return;
       }
-      setUser(me);
+
+      const res = await fetch("http://localhost:5000/api/auth/me", {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+
+      if (!res.ok) {
+        // invalid / expired token etc.
+        setUser(null);
+        return;
+      }
+
+      const data = await res.json();
+      setUser(data.user);
+    } catch (err) {
+      console.error("refreshUser error", err);
+      setUser(null);
+    }
+  };
+
+  // 👀 Run once when app loads – if token exists, fetch user
+  useEffect(() => {
+    (async () => {
+      await refreshUser();
       setLoading(false);
     })();
   }, []);
 
-  const loginWithToken = (token: string) => {
-    localStorage.setItem("token", token);
-    setLoading(true);
-
-    (async () => {
-      const me = await fetchMe(token);
-      if (!me) {
-        localStorage.removeItem("token");
-      }
-      setUser(me);
-      setLoading(false);
-    })();
-  };
-
   const logout = () => {
-    localStorage.removeItem("token");
+    if (typeof window !== "undefined") {
+      localStorage.removeItem("token");
+    }
     setUser(null);
+    // we won't route here; pages can call router.push("/login") after logout
   };
 
   return (
-    <AuthContext.Provider
-      value={{
-        user,
-        loading,
-        loginWithToken,
-        logout,
-      }}
-    >
+    <AuthContext.Provider value={{ user, loading, refreshUser, logout }}>
       {children}
     </AuthContext.Provider>
   );
-}
+};
 
-export function useAuth() {
+export const useAuth = (): AuthContextType => {
   const ctx = useContext(AuthContext);
   if (!ctx) {
-    throw new Error("useAuth must be used inside <AuthProvider />");
+    throw new Error("useAuth must be used inside AuthProvider");
   }
   return ctx;
-}
+};

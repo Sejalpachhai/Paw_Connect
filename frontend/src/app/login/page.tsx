@@ -1,8 +1,8 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useEffect, useState } from "react";
 import Script from "next/script";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useAuth } from "../AuthProvider";
 
 declare global {
@@ -13,28 +13,43 @@ declare global {
 
 export default function LoginPage() {
   const router = useRouter();
-  const { user, loginWithToken } = useAuth();
+  const searchParams = useSearchParams();
+  const { user, loading, refreshUser } = useAuth();
 
   const [activeTab, setActiveTab] = useState<"login" | "register">("login");
-  const [loading, setLoading] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
 
-  // login
+  // login form
   const [loginEmail, setLoginEmail] = useState("");
   const [loginPassword, setLoginPassword] = useState("");
 
-  // register
+  // register form
   const [regName, setRegName] = useState("");
   const [regEmail, setRegEmail] = useState("");
   const [regPassword, setRegPassword] = useState("");
 
-  // If already logged in, send user to home
-  useEffect(() => {
-    if (user) {
-      router.push("/");
-    }
-  }, [user, router]);
+  // forgot password email
+  const [resetEmail, setResetEmail] = useState("");
 
-  // ---------------- GOOGLE LOGIN ----------------
+  // If already logged in, don’t show login page
+  useEffect(() => {
+    if (!loading && user) {
+      router.replace("/");
+    }
+  }, [user, loading, router]);
+
+  //  If we came here with ?token=... (from reset link), redirect to reset page
+  useEffect(() => {
+    const token = searchParams.get("token");
+    const email = searchParams.get("email");
+    if (token && email) {
+      router.push(`/reset-password?token=${encodeURIComponent(
+        token
+      )}&email=${encodeURIComponent(email)}`);
+    }
+  }, [searchParams, router]);
+
+  // ---------- GOOGLE LOGIN ----------
   const handleCredentialResponse = async (response: any) => {
     try {
       const idToken = response.credential;
@@ -51,9 +66,9 @@ export default function LoginPage() {
         return;
       }
 
-      // ✅ use AuthProvider instead of manual localStorage
-      loginWithToken(data.token);
-      router.push("/");
+      localStorage.setItem("token", data.token);
+      await refreshUser();              //  IMPORTANT
+      router.replace("/");              // go to dashboard / home
     } catch (err) {
       console.error("Google login error", err);
       alert("Something went wrong with Google login");
@@ -78,15 +93,18 @@ export default function LoginPage() {
     );
   };
 
-  // ---------------- EMAIL LOGIN ----------------
+  // ---------- EMAIL LOGIN ----------
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    setLoading(true);
+    setSubmitting(true);
     try {
       const res = await fetch("http://localhost:5000/api/auth/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: loginEmail, password: loginPassword }),
+        body: JSON.stringify({
+          email: loginEmail,
+          password: loginPassword,
+        }),
       });
 
       const data = await res.json();
@@ -95,21 +113,21 @@ export default function LoginPage() {
         return;
       }
 
-      // ✅ use AuthProvider
-      loginWithToken(data.token);
-      router.push("/");
+      localStorage.setItem("token", data.token);
+      await refreshUser();             // get user from /me
+      router.replace("/");
     } catch (err) {
       console.error("Login error", err);
       alert("Something went wrong while logging in");
     } finally {
-      setLoading(false);
+      setSubmitting(false);
     }
   };
 
-  // ---------------- EMAIL REGISTER ----------------
+  // ---------- EMAIL REGISTER ----------
   const handleRegister = async (e: React.FormEvent) => {
     e.preventDefault();
-    setLoading(true);
+    setSubmitting(true);
     try {
       const res = await fetch("http://localhost:5000/api/auth/register", {
         method: "POST",
@@ -127,20 +145,68 @@ export default function LoginPage() {
         return;
       }
 
-      // ✅ auto-login after register
-      loginWithToken(data.token);
-      router.push("/");
+      alert("Account created! Please check your email to verify your account.");
+      // after registration we don’t auto-login; they verify email first
+      setActiveTab("login");
+      setLoginEmail(regEmail);
     } catch (err) {
       console.error("Register error", err);
       alert("Something went wrong while creating your account");
     } finally {
-      setLoading(false);
+      setSubmitting(false);
     }
   };
 
+  // ---------- FORGOT PASSWORD ----------
+  const handleForgotPassword = async () => {
+    if (!resetEmail) {
+      alert("Please enter your email first");
+      return;
+    }
+    setSubmitting(true);
+    try {
+      const res = await fetch(
+        "http://localhost:5000/api/auth/forgot-password",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email: resetEmail }),
+        }
+      );
+
+      const data = await res.json();
+      if (!res.ok) {
+        alert(data.error || "Something went wrong while sending reset email");
+        return;
+      }
+
+      alert("If this email exists, a reset link has been sent.");
+    } catch (err) {
+      console.error("Forgot password error", err);
+      alert("Something went wrong while sending reset email");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  // while we don't know user yet, avoid UI flicker
+  if (loading) {
+    return (
+      <div className="eon-auth-root">
+        <section className="eon-auth-hero">
+          <div className="eon-auth-hero-overlay" />
+        </section>
+        <section className="eon-auth-panel">
+          <div className="eon-auth-card">
+            <p style={{ textAlign: "center" }}>Loading…</p>
+          </div>
+        </section>
+      </div>
+    );
+  }
+
   return (
     <>
-      {/* Google script */}
       <Script
         src="https://accounts.google.com/gsi/client"
         async
@@ -149,7 +215,7 @@ export default function LoginPage() {
       />
 
       <div className="eon-auth-root">
-        {/* LEFT SIDE – mountain hero */}
+        {/* LEFT HERO */}
         <section className="eon-auth-hero">
           <div className="eon-auth-hero-overlay" />
           <div className="eon-auth-hero-content">
@@ -171,7 +237,7 @@ export default function LoginPage() {
           </div>
         </section>
 
-        {/* RIGHT SIDE – auth card */}
+        {/* RIGHT PANEL */}
         <section className="eon-auth-panel">
           <div className="eon-auth-card">
             <header className="eon-auth-header">
@@ -214,7 +280,10 @@ export default function LoginPage() {
                     <input
                       type="email"
                       value={loginEmail}
-                      onChange={(e) => setLoginEmail(e.target.value)}
+                      onChange={(e) => {
+                        setLoginEmail(e.target.value);
+                        setResetEmail(e.target.value);
+                      }}
                       required
                     />
                   </label>
@@ -227,9 +296,20 @@ export default function LoginPage() {
                       required
                     />
                   </label>
-                  <button type="submit" disabled={loading}>
-                    {loading ? "Please wait..." : "Login"}
+
+                  <button type="submit" disabled={submitting}>
+                    {submitting ? "Please wait..." : "Login"}
                   </button>
+
+                  <div className="eon-helper">
+                    <button
+                      type="button"
+                      className="eon-link-button"
+                      onClick={handleForgotPassword}
+                    >
+                      Forgot password?
+                    </button>
+                  </div>
                 </form>
               ) : (
                 <form className="eon-form" onSubmit={handleRegister}>
@@ -260,24 +340,30 @@ export default function LoginPage() {
                       required
                     />
                   </label>
-                  <button type="submit" disabled={loading}>
-                    {loading ? "Please wait..." : "Create account"}
+
+                  <button type="submit" disabled={submitting}>
+                    {submitting ? "Please wait..." : "Create account"}
                   </button>
+                  <p className="eon-helper">
+                    After creating an account, please verify your email before
+                    logging in.
+                  </p>
                 </form>
               )}
             </div>
 
-            {/* GOOGLE under forms */}
-            <div className="eon-google-block">
-              <div className="eon-divider">
-                <span>OR CONTINUE WITH</span>
-              </div>
-              <div id="googleSignInDiv" className="eon-google-btn">
-                {/* Google renders the button here; fallback text if not loaded */}
-                <span className="eon-google-fallback">
-                  Google sign-in loading…
-                </span>
-              </div>
+            {/* Divider + Google */}
+            <div className="eon-divider-row">
+              <span className="eon-divider-line" />
+              <span className="eon-divider-text">or continue with</span>
+              <span className="eon-divider-line" />
+            </div>
+
+            <div id="googleSignInDiv" className="eon-google-under">
+              <span className="eon-google-fallback">
+                {/* This text will hide once Google renders the button */}
+                Sign in with Google
+              </span>
             </div>
           </div>
         </section>

@@ -31,10 +31,10 @@ export default function LoginPage() {
   // forgot password email
   const [resetEmail, setResetEmail] = useState("");
 
-  // If already logged in, don’t show login page
+  // ✅ If already logged in, don’t show login page – go to /dashboard
   useEffect(() => {
     if (!loading && user) {
-      router.replace("/");
+      router.replace("/dashboard");
     }
   }, [user, loading, router]);
 
@@ -43,9 +43,11 @@ export default function LoginPage() {
     const token = searchParams.get("token");
     const email = searchParams.get("email");
     if (token && email) {
-      router.push(`/reset-password?token=${encodeURIComponent(
-        token
-      )}&email=${encodeURIComponent(email)}`);
+      router.push(
+        `/reset-password?token=${encodeURIComponent(
+          token
+        )}&email=${encodeURIComponent(email)}`
+      );
     }
   }, [searchParams, router]);
 
@@ -67,8 +69,8 @@ export default function LoginPage() {
       }
 
       localStorage.setItem("token", data.token);
-      await refreshUser();              //  IMPORTANT
-      router.replace("/");              // go to dashboard / home
+      await refreshUser();              // get user from /me
+      router.replace("/dashboard");     // ✅ go to dashboard
     } catch (err) {
       console.error("Google login error", err);
       alert("Something went wrong with Google login");
@@ -114,8 +116,8 @@ export default function LoginPage() {
       }
 
       localStorage.setItem("token", data.token);
-      await refreshUser();             // get user from /me
-      router.replace("/");
+      await refreshUser();              // get user from /me
+      router.replace("/dashboard");     // ✅ go to dashboard
     } catch (err) {
       console.error("Login error", err);
       alert("Something went wrong while logging in");

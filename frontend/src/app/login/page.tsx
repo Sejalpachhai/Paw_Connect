@@ -22,23 +22,22 @@ export default function LoginPage() {
   // login form
   const [loginEmail, setLoginEmail] = useState("");
   const [loginPassword, setLoginPassword] = useState("");
+  const [showLoginPassword, setShowLoginPassword] = useState(false);
 
   // register form
   const [regName, setRegName] = useState("");
   const [regEmail, setRegEmail] = useState("");
   const [regPassword, setRegPassword] = useState("");
+  const [showRegPassword, setShowRegPassword] = useState(false);
 
-  // forgot password email
-  const [resetEmail, setResetEmail] = useState("");
-
-  // ✅ If already logged in, don’t show login page – go to /dashboard
+  // If already logged in, don’t show login page – go to /dashboard
   useEffect(() => {
     if (!loading && user) {
       router.replace("/dashboard");
     }
   }, [user, loading, router]);
 
-  //  If we came here with ?token=... (from reset link), redirect to reset page
+  // If we came here with ?token=... (from reset link), redirect to reset page
   useEffect(() => {
     const token = searchParams.get("token");
     const email = searchParams.get("email");
@@ -69,8 +68,8 @@ export default function LoginPage() {
       }
 
       localStorage.setItem("token", data.token);
-      await refreshUser();              // get user from /me
-      router.replace("/dashboard");     // ✅ go to dashboard
+      await refreshUser(); // get user from /me
+      router.replace("/dashboard"); // go to dashboard
     } catch (err) {
       console.error("Google login error", err);
       alert("Something went wrong with Google login");
@@ -116,8 +115,8 @@ export default function LoginPage() {
       }
 
       localStorage.setItem("token", data.token);
-      await refreshUser();              // get user from /me
-      router.replace("/dashboard");     // ✅ go to dashboard
+      await refreshUser(); // get user from /me
+      router.replace("/dashboard"); // go to dashboard
     } catch (err) {
       console.error("Login error", err);
       alert("Something went wrong while logging in");
@@ -154,38 +153,6 @@ export default function LoginPage() {
     } catch (err) {
       console.error("Register error", err);
       alert("Something went wrong while creating your account");
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  // ---------- FORGOT PASSWORD ----------
-  const handleForgotPassword = async () => {
-    if (!resetEmail) {
-      alert("Please enter your email first");
-      return;
-    }
-    setSubmitting(true);
-    try {
-      const res = await fetch(
-        "http://localhost:5000/api/auth/forgot-password",
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ email: resetEmail }),
-        }
-      );
-
-      const data = await res.json();
-      if (!res.ok) {
-        alert(data.error || "Something went wrong while sending reset email");
-        return;
-      }
-
-      alert("If this email exists, a reset link has been sent.");
-    } catch (err) {
-      console.error("Forgot password error", err);
-      alert("Something went wrong while sending reset email");
     } finally {
       setSubmitting(false);
     }
@@ -282,21 +249,31 @@ export default function LoginPage() {
                     <input
                       type="email"
                       value={loginEmail}
-                      onChange={(e) => {
-                        setLoginEmail(e.target.value);
-                        setResetEmail(e.target.value);
-                      }}
+                      onChange={(e) => setLoginEmail(e.target.value)}
                       required
                     />
                   </label>
+
                   <label>
                     <span>Password</span>
-                    <input
-                      type="password"
-                      value={loginPassword}
-                      onChange={(e) => setLoginPassword(e.target.value)}
-                      required
-                    />
+                    <div className="relative">
+                      <input
+                        type={showLoginPassword ? "text" : "password"}
+                        value={loginPassword}
+                        onChange={(e) => setLoginPassword(e.target.value)}
+                        required
+                        className="pr-16"
+                      />
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setShowLoginPassword((prev) => !prev)
+                        }
+                        className="absolute inset-y-0 right-3 flex items-center text-[11px] text-slate-400 hover:text-slate-100"
+                      >
+                        {showLoginPassword ? "Hide" : "Show"}
+                      </button>
+                    </div>
                   </label>
 
                   <button type="submit" disabled={submitting}>
@@ -307,7 +284,7 @@ export default function LoginPage() {
                     <button
                       type="button"
                       className="eon-link-button"
-                      onClick={handleForgotPassword}
+                      onClick={() => router.push("/forgot-password")}
                     >
                       Forgot password?
                     </button>
@@ -335,12 +312,24 @@ export default function LoginPage() {
                   </label>
                   <label>
                     <span>Password</span>
-                    <input
-                      type="password"
-                      value={regPassword}
-                      onChange={(e) => setRegPassword(e.target.value)}
-                      required
-                    />
+                    <div className="relative">
+                      <input
+                        type={showRegPassword ? "text" : "password"}
+                        value={regPassword}
+                        onChange={(e) => setRegPassword(e.target.value)}
+                        required
+                        className="pr-16"
+                      />
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setShowRegPassword((prev) => !prev)
+                        }
+                        className="absolute inset-y-0 right-3 flex items-center text-[11px] text-slate-400 hover:text-slate-100"
+                      >
+                        {showRegPassword ? "Hide" : "Show"}
+                      </button>
+                    </div>
                   </label>
 
                   <button type="submit" disabled={submitting}>

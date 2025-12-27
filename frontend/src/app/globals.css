@@ -211,30 +211,6 @@ body {
   box-shadow: 0 0 0 1px rgba(249, 115, 22, 0.35);
 }
 
-.eon-form button {
-  margin-top: 0.4rem;
-  border-radius: 999px;
-  border: none;
-  padding: 0.55rem 0.9rem;
-  font-size: 0.85rem;
-  font-weight: 600;
-  cursor: pointer;
-  background: linear-gradient(135deg, #f97316, #fb923c);
-  color: #f9fafb;
-  transition: transform 0.1s, box-shadow 0.1s, opacity 0.1s;
-}
-
-.eon-form button:hover {
-  transform: translateY(-1px);
-  box-shadow: 0 10px 30px rgba(249, 115, 22, 0.4);
-}
-
-.eon-form button:disabled {
-  opacity: 0.6;
-  transform: none;
-  box-shadow: none;
-  cursor: default;
-}
 
 /* Divider + Google button UNDER the forms */
 .eon-divider-row {
@@ -295,4 +271,79 @@ body {
     padding: 2rem 1.75rem;
   }
 }
+/* ✅ DO NOT style all buttons inside form (it breaks icon button)
+   Instead, style only submit buttons via a class */
+.eon-submit-btn {
+  margin-top: 0.4rem;
+  border-radius: 999px;
+  border: none;
+  padding: 0.55rem 0.9rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  background: linear-gradient(135deg, #f97316, #fb923c);
+  color: #f9fafb;
+  transition: transform 0.1s, box-shadow 0.1s, opacity 0.1s;
+}
 
+.eon-submit-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 10px 30px rgba(249, 115, 22, 0.4);
+}
+
+.eon-submit-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+  transform: none;
+  box-shadow: none;
+}
+
+/* ---- Fixed icon password input (prevents "moving") ---- */
+.eon-input-wrap {
+  position: relative;
+  width: 100%;
+}
+
+.eon-input {
+  width: 100%;
+}
+
+.eon-input-has-icon {
+  padding-right: 3rem !important; /* reserve space for the eye icon */
+}
+
+.eon-icon-btn {
+  position: absolute;
+  right: 0.75rem;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 36px;
+  height: 36px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent; /* ✅ no orange circle */
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  color: rgba(226, 232, 240, 0.85);
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, color 0.15s,
+    transform 0.08s;
+  padding: 0; /* ✅ prevents button padding from affecting size */
+  margin: 0; /* ✅ prevents margin from affecting layout */
+}
+
+.eon-icon-btn:hover {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(148, 163, 184, 0.45);
+  color: rgba(226, 232, 240, 1);
+}
+
+.eon-icon-btn:active {
+  transform: translateY(-50%) scale(0.98);
+}
+
+.eon-icon-btn:focus {
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(249, 115, 22, 0.25);
+}

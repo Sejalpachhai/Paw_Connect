@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Script from "next/script";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useAuth } from "../AuthProvider";
+import { Eye, EyeOff } from "lucide-react";
 
 declare global {
   interface Window {
@@ -30,14 +31,18 @@ export default function LoginPage() {
   const [regPassword, setRegPassword] = useState("");
   const [showRegPassword, setShowRegPassword] = useState(false);
 
-  // If already logged in, don’t show login page – go to /dashboard
+  // Google init guards
+  const googleInitializedRef = useRef(false);
+  const googleButtonRenderedRef = useRef(false);
+
+  // If already logged in, go dashboard
   useEffect(() => {
     if (!loading && user) {
       router.replace("/dashboard");
     }
   }, [user, loading, router]);
 
-  // If we came here with ?token=... (from reset link), redirect to reset page
+  // Reset password redirect if token/email exists
   useEffect(() => {
     const token = searchParams.get("token");
     const email = searchParams.get("email");
@@ -68,31 +73,53 @@ export default function LoginPage() {
       }
 
       localStorage.setItem("token", data.token);
-      await refreshUser(); // get user from /me
-      router.replace("/dashboard"); // go to dashboard
+      await refreshUser();
+      router.replace("/dashboard");
     } catch (err) {
       console.error("Google login error", err);
       alert("Something went wrong with Google login");
     }
   };
 
-  const handleScriptLoad = () => {
+  const renderGoogleButton = () => {
     if (!window.google) return;
 
-    window.google.accounts.id.initialize({
-      client_id: process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID,
-      callback: handleCredentialResponse,
+    // Initialize once
+    if (!googleInitializedRef.current) {
+      window.google.accounts.id.initialize({
+        client_id: process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID,
+        callback: handleCredentialResponse,
+      });
+      googleInitializedRef.current = true;
+    }
+
+    const el = document.getElementById("googleSignInDiv");
+    if (!el) return;
+
+    // Re-render safely if needed
+    el.innerHTML = "";
+    window.google.accounts.id.renderButton(el, {
+      theme: "outline",
+      size: "large",
+      width: 320,
     });
 
-    window.google.accounts.id.renderButton(
-      document.getElementById("googleSignInDiv"),
-      {
-        theme: "outline",
-        size: "large",
-        width: 280,
-      }
-    );
+    googleButtonRenderedRef.current = true;
   };
+
+  const handleScriptLoad = () => {
+    renderGoogleButton();
+  };
+
+  // If user switches tabs or component updates, ensure button stays rendered
+  useEffect(() => {
+    // slight delay so DOM is ready
+    const t = setTimeout(() => {
+      if (window.google) renderGoogleButton();
+    }, 50);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab]);
 
   // ---------- EMAIL LOGIN ----------
   const handleLogin = async (e: React.FormEvent) => {
@@ -115,8 +142,8 @@ export default function LoginPage() {
       }
 
       localStorage.setItem("token", data.token);
-      await refreshUser(); // get user from /me
-      router.replace("/dashboard"); // go to dashboard
+      await refreshUser();
+      router.replace("/dashboard");
     } catch (err) {
       console.error("Login error", err);
       alert("Something went wrong while logging in");
@@ -147,7 +174,6 @@ export default function LoginPage() {
       }
 
       alert("Account created! Please check your email to verify your account.");
-      // after registration we don’t auto-login; they verify email first
       setActiveTab("login");
       setLoginEmail(regEmail);
     } catch (err) {
@@ -158,7 +184,7 @@ export default function LoginPage() {
     }
   };
 
-  // while we don't know user yet, avoid UI flicker
+  // Loading UI
   if (loading) {
     return (
       <div className="eon-auth-root">
@@ -195,8 +221,8 @@ export default function LoginPage() {
               where your journey paused.
             </h1>
             <p className="eon-sub">
-              Save routes, stories and hidden spots across the Himalayas.
-              One account for all your rides, treks and adventures.
+              Save routes, stories and hidden spots across the Himalayas. One
+              account for all your rides, treks and adventures.
             </p>
             <ul className="eon-points">
               <li>AI-powered route ideas inside Nepal</li>
@@ -219,9 +245,7 @@ export default function LoginPage() {
               <button
                 type="button"
                 className={
-                  activeTab === "login"
-                    ? "eon-tab eon-tab-active"
-                    : "eon-tab"
+                  activeTab === "login" ? "eon-tab eon-tab-active" : "eon-tab"
                 }
                 onClick={() => setActiveTab("login")}
               >
@@ -250,33 +274,47 @@ export default function LoginPage() {
                       type="email"
                       value={loginEmail}
                       onChange={(e) => setLoginEmail(e.target.value)}
+                      placeholder="you@example.com"
                       required
                     />
                   </label>
 
                   <label>
                     <span>Password</span>
-                    <div className="relative">
+
+                    <div className="eon-input-wrap">
                       <input
                         type={showLoginPassword ? "text" : "password"}
                         value={loginPassword}
                         onChange={(e) => setLoginPassword(e.target.value)}
                         required
-                        className="pr-16"
+                        className="eon-input eon-input-has-icon"
+                        placeholder="••••••••"
                       />
+
                       <button
                         type="button"
-                        onClick={() =>
-                          setShowLoginPassword((prev) => !prev)
+                        onClick={() => setShowLoginPassword((p) => !p)}
+                        className="eon-icon-btn"
+                        aria-label={
+                          showLoginPassword ? "Hide password" : "Show password"
                         }
-                        className="absolute inset-y-0 right-3 flex items-center text-[11px] text-slate-400 hover:text-slate-100"
+                        title={showLoginPassword ? "Hide" : "Show"}
                       >
-                        {showLoginPassword ? "Hide" : "Show"}
+                        {showLoginPassword ? (
+                          <EyeOff size={18} />
+                        ) : (
+                          <Eye size={18} />
+                        )}
                       </button>
                     </div>
                   </label>
 
-                  <button type="submit" disabled={submitting}>
+                  <button
+                    type="submit"
+                    className="eon-submit-btn"
+                    disabled={submitting}
+                  >
                     {submitting ? "Please wait..." : "Login"}
                   </button>
 
@@ -298,43 +336,61 @@ export default function LoginPage() {
                       type="text"
                       value={regName}
                       onChange={(e) => setRegName(e.target.value)}
+                      placeholder="Your name"
                       required
                     />
                   </label>
+
                   <label>
                     <span>Email</span>
                     <input
                       type="email"
                       value={regEmail}
                       onChange={(e) => setRegEmail(e.target.value)}
+                      placeholder="you@example.com"
                       required
                     />
                   </label>
+
                   <label>
                     <span>Password</span>
-                    <div className="relative">
+
+                    <div className="eon-input-wrap">
                       <input
                         type={showRegPassword ? "text" : "password"}
                         value={regPassword}
                         onChange={(e) => setRegPassword(e.target.value)}
                         required
-                        className="pr-16"
+                        className="eon-input eon-input-has-icon"
+                        placeholder="••••••••"
                       />
+
                       <button
                         type="button"
-                        onClick={() =>
-                          setShowRegPassword((prev) => !prev)
+                        onClick={() => setShowRegPassword((p) => !p)}
+                        className="eon-icon-btn"
+                        aria-label={
+                          showRegPassword ? "Hide password" : "Show password"
                         }
-                        className="absolute inset-y-0 right-3 flex items-center text-[11px] text-slate-400 hover:text-slate-100"
+                        title={showRegPassword ? "Hide" : "Show"}
                       >
-                        {showRegPassword ? "Hide" : "Show"}
+                        {showRegPassword ? (
+                          <EyeOff size={18} />
+                        ) : (
+                          <Eye size={18} />
+                        )}
                       </button>
                     </div>
                   </label>
 
-                  <button type="submit" disabled={submitting}>
+                  <button
+                    type="submit"
+                    className="eon-submit-btn"
+                    disabled={submitting}
+                  >
                     {submitting ? "Please wait..." : "Create account"}
                   </button>
+
                   <p className="eon-helper">
                     After creating an account, please verify your email before
                     logging in.
@@ -351,10 +407,8 @@ export default function LoginPage() {
             </div>
 
             <div id="googleSignInDiv" className="eon-google-under">
-              <span className="eon-google-fallback">
-                {/* This text will hide once Google renders the button */}
-                Sign in with Google
-              </span>
+              {/* fallback text only if Google doesn't render */}
+              <span className="eon-google-fallback">Sign in with Google</span>
             </div>
           </div>
         </section>

@@ -2,24 +2,19 @@
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import pool from "../config/db.js";
+import crypto from "crypto";
+import { sendEmail } from "../utils/email.js";
 
-// helper to create our own JWT
+// helper to create JWT
 const generateToken = (user) => {
   return jwt.sign(
-    {
-      id: user.id,
-      name: user.name,
-      email: user.email,
-    },
+    { id: user.id, name: user.name, email: user.email },
     process.env.JWT_SECRET,
     { expiresIn: "7d" }
   );
 };
 
 // --------- REGISTER (email + password + email verification) ----------
-import crypto from "crypto";
-import { sendEmail } from "../utils/email.js";
-
 export const register = async (req, res) => {
   const { name, email, password } = req.body;
 
@@ -30,11 +25,9 @@ export const register = async (req, res) => {
         .json({ error: "Name, email and password required" });
     }
 
-    // check if user exists
     const existing = await pool.query("SELECT * FROM users WHERE email = $1", [
       email,
     ]);
-
     if (existing.rows.length > 0) {
       return res
         .status(400)
@@ -42,9 +35,7 @@ export const register = async (req, res) => {
     }
 
     // strong password rule
-    const strongPassword =
-      /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d).{8,}$/;
-
+    const strongPassword = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d).{8,}$/;
     if (!strongPassword.test(password)) {
       return res.status(400).json({
         error:
@@ -55,20 +46,14 @@ export const register = async (req, res) => {
     const salt = await bcrypt.genSalt(10);
     const passwordHash = await bcrypt.hash(password, salt);
 
-    // create verification token
     const verificationToken = crypto.randomBytes(32).toString("hex");
 
-    // INSERT user with verification fields
-    const result = await pool.query(
-      `INSERT INTO users (name, email, password_hash, verified, verification_token) 
-       VALUES ($1, $2, $3, $4, $5) 
-       RETURNING id, name, email`,
+    await pool.query(
+      `INSERT INTO users (name, email, password_hash, verified, verification_token)
+       VALUES ($1, $2, $3, $4, $5)`,
       [name, email, passwordHash, false, verificationToken]
     );
 
-    const user = result.rows[0];
-
-    // VERIFICATION EMAIL
     const verifyUrl = `${process.env.FRONTEND_URL}/verify-email?token=${verificationToken}`;
 
     await sendEmail({
@@ -83,10 +68,8 @@ export const register = async (req, res) => {
       `,
     });
 
-    // Do NOT auto-login
     res.json({
-      message:
-        "Account created! Please check your email to verify your account.",
+      message: "Account created! Please check your email to verify your account.",
     });
   } catch (err) {
     console.error("Register error:", err.message);
@@ -126,7 +109,6 @@ export const verifyEmail = async (req, res) => {
   }
 };
 
-
 // --------- LOGIN (email + password) ----------
 export const login = async (req, res) => {
   const { email, password } = req.body;
@@ -146,7 +128,13 @@ export const login = async (req, res) => {
 
     const user = result.rows[0];
 
-    // ⬇⬇⬇ CHANGED: check password_hash instead of password
+    // block login until email verified (only for email/password accounts)
+    if (user.password_hash && user.verified === false) {
+      return res.status(403).json({
+        error: "Please verify your email before logging in.",
+      });
+    }
+
     if (!user.password_hash) {
       return res
         .status(400)
@@ -154,8 +142,6 @@ export const login = async (req, res) => {
     }
 
     const match = await bcrypt.compare(password, user.password_hash);
-    // ⬆⬆⬆
-
     if (!match) {
       return res.status(400).json({ error: "Invalid email or password" });
     }
@@ -177,7 +163,7 @@ export const googleAuth = async (req, res) => {
       return res.status(400).json({ error: "idToken is required" });
     }
 
-    // NOTE: This is a simple decode for dev/demo (NOT secure for production)
+    // dev/demo decode (not production secure)
     const parts = idToken.split(".");
     if (parts.length !== 3) {
       return res.status(400).json({ error: "Invalid idToken format" });
@@ -195,18 +181,18 @@ export const googleAuth = async (req, res) => {
         .json({ error: "Google token did not contain an email" });
     }
 
-    // check if user exists
     let userResult = await pool.query("SELECT * FROM users WHERE email = $1", [
       email,
     ]);
 
     let user;
     if (userResult.rows.length === 0) {
-      // create a new user with no password (Google only)
+      // ✅ IMPORTANT: set verified true for Google users
       const insertResult = await pool.query(
-        // password_hash will be NULL, provider can stay default (e.g. 'google' if you set that)
-        "INSERT INTO users (name, email) VALUES ($1, $2) RETURNING id, name, email",
-        [name, email]
+        `INSERT INTO users (name, email, verified, verification_token)
+         VALUES ($1, $2, $3, $4)
+         RETURNING id, name, email`,
+        [name, email, true, null]
       );
       user = insertResult.rows[0];
     } else {
@@ -224,7 +210,7 @@ export const googleAuth = async (req, res) => {
 // --------- GET CURRENT USER (/me) ----------
 export const getMe = async (req, res) => {
   try {
-    const { id, name, email } = req.user; // set by protect()
+    const { id, name, email } = req.user;
     res.json({ user: { id, name, email } });
   } catch (err) {
     console.error("GetMe error:", err.message);

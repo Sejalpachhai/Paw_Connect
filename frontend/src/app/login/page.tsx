@@ -1,10 +1,10 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Script from "next/script";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useAuth } from "../AuthProvider";
-import { Eye, EyeOff } from "lucide-react";
+import { Eye, EyeOff, Mail, Lock } from "lucide-react";
 
 declare global {
   interface Window {
@@ -19,6 +19,7 @@ export default function LoginPage() {
 
   const [activeTab, setActiveTab] = useState<"login" | "register">("login");
   const [submitting, setSubmitting] = useState(false);
+  const [errorMsg, setErrorMsg] = useState<string>("");
 
   // login form
   const [loginEmail, setLoginEmail] = useState("");
@@ -31,18 +32,14 @@ export default function LoginPage() {
   const [regPassword, setRegPassword] = useState("");
   const [showRegPassword, setShowRegPassword] = useState(false);
 
-  // Google init guards
-  const googleInitializedRef = useRef(false);
-  const googleButtonRenderedRef = useRef(false);
+  const googleBtnId = useMemo(() => "googleSignInDiv", []);
 
-  // If already logged in, go dashboard
+  // If already logged in, don’t show login page – go to /dashboard
   useEffect(() => {
-    if (!loading && user) {
-      router.replace("/dashboard");
-    }
+    if (!loading && user) router.replace("/dashboard");
   }, [user, loading, router]);
 
-  // Reset password redirect if token/email exists
+  // If we came here with ?token=... (from reset link), redirect to reset page
   useEffect(() => {
     const token = searchParams.get("token");
     const email = searchParams.get("email");
@@ -55,10 +52,20 @@ export default function LoginPage() {
     }
   }, [searchParams, router]);
 
+  // Clear error when tab changes
+  useEffect(() => {
+    setErrorMsg("");
+  }, [activeTab]);
+
   // ---------- GOOGLE LOGIN ----------
   const handleCredentialResponse = async (response: any) => {
     try {
-      const idToken = response.credential;
+      setErrorMsg("");
+      const idToken = response?.credential;
+      if (!idToken) {
+        setErrorMsg("Google login didn’t return a token. Try again.");
+        return;
+      }
 
       const res = await fetch("http://localhost:5000/api/auth/google", {
         method: "POST",
@@ -68,7 +75,7 @@ export default function LoginPage() {
 
       const data = await res.json();
       if (!res.ok) {
-        alert(data.error || "Google authentication failed");
+        setErrorMsg(data?.error || "Google authentication failed.");
         return;
       }
 
@@ -77,46 +84,39 @@ export default function LoginPage() {
       router.replace("/dashboard");
     } catch (err) {
       console.error("Google login error", err);
-      alert("Something went wrong with Google login");
+      setErrorMsg("Something went wrong with Google login.");
     }
   };
 
   const renderGoogleButton = () => {
     if (!window.google) return;
 
-    // Initialize once
-    if (!googleInitializedRef.current) {
+    try {
       window.google.accounts.id.initialize({
         client_id: process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID,
         callback: handleCredentialResponse,
       });
-      googleInitializedRef.current = true;
+
+      const el = document.getElementById(googleBtnId);
+      if (!el) return;
+
+      // Important: clear then render (prevents disappearing + duplicates)
+      el.innerHTML = "";
+
+      window.google.accounts.id.renderButton(el, {
+        theme: "outline",
+        size: "large",
+        width: 320,
+      });
+    } catch (e) {
+      console.error("Google button render error", e);
     }
-
-    const el = document.getElementById("googleSignInDiv");
-    if (!el) return;
-
-    // Re-render safely if needed
-    el.innerHTML = "";
-    window.google.accounts.id.renderButton(el, {
-      theme: "outline",
-      size: "large",
-      width: 320,
-    });
-
-    googleButtonRenderedRef.current = true;
   };
 
-  const handleScriptLoad = () => {
-    renderGoogleButton();
-  };
-
-  // If user switches tabs or component updates, ensure button stays rendered
+  // Run render again if tab changes (keeps it consistent if DOM changes)
   useEffect(() => {
-    // slight delay so DOM is ready
-    const t = setTimeout(() => {
-      if (window.google) renderGoogleButton();
-    }, 50);
+    // small delay ensures DOM is ready after tab switch
+    const t = setTimeout(() => renderGoogleButton(), 50);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTab]);
@@ -125,19 +125,18 @@ export default function LoginPage() {
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setSubmitting(true);
+    setErrorMsg("");
+
     try {
       const res = await fetch("http://localhost:5000/api/auth/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          email: loginEmail,
-          password: loginPassword,
-        }),
+        body: JSON.stringify({ email: loginEmail, password: loginPassword }),
       });
 
       const data = await res.json();
       if (!res.ok) {
-        alert(data.error || "Login failed");
+        setErrorMsg(data?.error || "Login failed. Check your details.");
         return;
       }
 
@@ -146,7 +145,7 @@ export default function LoginPage() {
       router.replace("/dashboard");
     } catch (err) {
       console.error("Login error", err);
-      alert("Something went wrong while logging in");
+      setErrorMsg("Something went wrong while logging in.");
     } finally {
       setSubmitting(false);
     }
@@ -156,20 +155,18 @@ export default function LoginPage() {
   const handleRegister = async (e: React.FormEvent) => {
     e.preventDefault();
     setSubmitting(true);
+    setErrorMsg("");
+
     try {
       const res = await fetch("http://localhost:5000/api/auth/register", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          name: regName,
-          email: regEmail,
-          password: regPassword,
-        }),
+        body: JSON.stringify({ name: regName, email: regEmail, password: regPassword }),
       });
 
       const data = await res.json();
       if (!res.ok) {
-        alert(data.error || "Registration failed");
+        setErrorMsg(data?.error || "Registration failed. Try again.");
         return;
       }
 
@@ -178,13 +175,13 @@ export default function LoginPage() {
       setLoginEmail(regEmail);
     } catch (err) {
       console.error("Register error", err);
-      alert("Something went wrong while creating your account");
+      setErrorMsg("Something went wrong while creating your account.");
     } finally {
       setSubmitting(false);
     }
   };
 
-  // Loading UI
+  // while we don't know user yet, avoid UI flicker
   if (loading) {
     return (
       <div className="eon-auth-root">
@@ -206,7 +203,7 @@ export default function LoginPage() {
         src="https://accounts.google.com/gsi/client"
         async
         defer
-        onLoad={handleScriptLoad}
+        onLoad={renderGoogleButton}
       />
 
       <div className="eon-auth-root">
@@ -221,8 +218,8 @@ export default function LoginPage() {
               where your journey paused.
             </h1>
             <p className="eon-sub">
-              Save routes, stories and hidden spots across the Himalayas. One
-              account for all your rides, treks and adventures.
+              Save routes, stories and hidden spots across the Himalayas. One account for all your rides,
+              treks and adventures.
             </p>
             <ul className="eon-points">
               <li>AI-powered route ideas inside Nepal</li>
@@ -241,81 +238,88 @@ export default function LoginPage() {
             </header>
 
             {/* Tabs */}
-            <div className="eon-auth-tabs">
+            <div className="eon-auth-tabs" role="tablist" aria-label="Authentication tabs">
               <button
                 type="button"
-                className={
-                  activeTab === "login" ? "eon-tab eon-tab-active" : "eon-tab"
-                }
+                className={activeTab === "login" ? "eon-tab eon-tab-active" : "eon-tab"}
                 onClick={() => setActiveTab("login")}
+                aria-selected={activeTab === "login"}
               >
                 Login
               </button>
               <button
                 type="button"
-                className={
-                  activeTab === "register"
-                    ? "eon-tab eon-tab-active"
-                    : "eon-tab"
-                }
+                className={activeTab === "register" ? "eon-tab eon-tab-active" : "eon-tab"}
                 onClick={() => setActiveTab("register")}
+                aria-selected={activeTab === "register"}
               >
                 Create account
               </button>
             </div>
 
+            {/* Error */}
+            {errorMsg ? (
+              <div className="eon-error" role="alert">
+                {errorMsg}
+              </div>
+            ) : null}
+
             {/* Forms */}
             <div className="eon-form-wrapper">
               {activeTab === "login" ? (
                 <form className="eon-form" onSubmit={handleLogin}>
+                  {/* Email */}
                   <label>
                     <span>Email</span>
-                    <input
-                      type="email"
-                      value={loginEmail}
-                      onChange={(e) => setLoginEmail(e.target.value)}
-                      placeholder="you@example.com"
-                      required
-                    />
-                  </label>
-
-                  <label>
-                    <span>Password</span>
-
-                    <div className="eon-input-wrap">
+                    <div className="eon-field">
+                      <span className="eon-field-icon" aria-hidden="true">
+                        <Mail size={16} />
+                      </span>
                       <input
-                        type={showLoginPassword ? "text" : "password"}
-                        value={loginPassword}
-                        onChange={(e) => setLoginPassword(e.target.value)}
+                        type="email"
+                        value={loginEmail}
+                        onChange={(e) => setLoginEmail(e.target.value)}
+                        placeholder="you@example.com"
                         required
-                        className="eon-input eon-input-has-icon"
-                        placeholder="••••••••"
+                        className="eon-input eon-input-with-left-icon"
+                        autoComplete="email"
                       />
-
-                      <button
-                        type="button"
-                        onClick={() => setShowLoginPassword((p) => !p)}
-                        className="eon-icon-btn"
-                        aria-label={
-                          showLoginPassword ? "Hide password" : "Show password"
-                        }
-                        title={showLoginPassword ? "Hide" : "Show"}
-                      >
-                        {showLoginPassword ? (
-                          <EyeOff size={18} />
-                        ) : (
-                          <Eye size={18} />
-                        )}
-                      </button>
                     </div>
                   </label>
 
-                  <button
-                    type="submit"
-                    className="eon-submit-btn"
-                    disabled={submitting}
-                  >
-                    {submitting ? "Please wait..." : "Login"}
+                  {/* Password */}
+                  <label>
+                    <span>Password</span>
+                    <div className="eon-field">
+                      <span className="eon-field-icon" aria-hidden="true">
+                        <Lock size={16} />
+                      </span>
+
+                      <div className="eon-input-wrap">
+                        <input
+                          type={showLoginPassword ? "text" : "password"}
+                          value={loginPassword}
+                          onChange={(e) => setLoginPassword(e.target.value)}
+                          required
+                          className="eon-input eon-input-with-left-icon eon-input-has-icon"
+                          placeholder="••••••••"
+                          autoComplete="current-password"
+                        />
+
+                        <button
+                          type="button"
+                          onClick={() => setShowLoginPassword((prev) => !prev)}
+                          className="eon-icon-btn"
+                          aria-label={showLoginPassword ? "Hide password" : "Show password"}
+                        >
+                          {showLoginPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                        </button>
+                      </div>
+                    </div>
+                  </label>
+
+                  <button type="submit" className="eon-submit-btn" disabled={submitting}>
+                    {submitting ? "Logging in..." : "Login"}
                   </button>
 
                   <div className="eon-helper">
@@ -336,8 +340,9 @@ export default function LoginPage() {
                       type="text"
                       value={regName}
                       onChange={(e) => setRegName(e.target.value)}
-                      placeholder="Your name"
                       required
+                      placeholder="Your full name"
+                      autoComplete="name"
                     />
                   </label>
 
@@ -347,14 +352,14 @@ export default function LoginPage() {
                       type="email"
                       value={regEmail}
                       onChange={(e) => setRegEmail(e.target.value)}
-                      placeholder="you@example.com"
                       required
+                      placeholder="you@example.com"
+                      autoComplete="email"
                     />
                   </label>
 
                   <label>
                     <span>Password</span>
-
                     <div className="eon-input-wrap">
                       <input
                         type={showRegPassword ? "text" : "password"}
@@ -363,37 +368,25 @@ export default function LoginPage() {
                         required
                         className="eon-input eon-input-has-icon"
                         placeholder="••••••••"
+                        autoComplete="new-password"
                       />
-
                       <button
                         type="button"
-                        onClick={() => setShowRegPassword((p) => !p)}
+                        onClick={() => setShowRegPassword((prev) => !prev)}
                         className="eon-icon-btn"
-                        aria-label={
-                          showRegPassword ? "Hide password" : "Show password"
-                        }
-                        title={showRegPassword ? "Hide" : "Show"}
+                        aria-label={showRegPassword ? "Hide password" : "Show password"}
                       >
-                        {showRegPassword ? (
-                          <EyeOff size={18} />
-                        ) : (
-                          <Eye size={18} />
-                        )}
+                        {showRegPassword ? <EyeOff size={18} /> : <Eye size={18} />}
                       </button>
                     </div>
                   </label>
 
-                  <button
-                    type="submit"
-                    className="eon-submit-btn"
-                    disabled={submitting}
-                  >
-                    {submitting ? "Please wait..." : "Create account"}
+                  <button type="submit" className="eon-submit-btn" disabled={submitting}>
+                    {submitting ? "Creating..." : "Create account"}
                   </button>
 
                   <p className="eon-helper">
-                    After creating an account, please verify your email before
-                    logging in.
+                    After creating an account, please verify your email before logging in.
                   </p>
                 </form>
               )}
@@ -406,8 +399,7 @@ export default function LoginPage() {
               <span className="eon-divider-line" />
             </div>
 
-            <div id="googleSignInDiv" className="eon-google-under">
-              {/* fallback text only if Google doesn't render */}
+            <div id={googleBtnId} className="eon-google-under">
               <span className="eon-google-fallback">Sign in with Google</span>
             </div>
           </div>

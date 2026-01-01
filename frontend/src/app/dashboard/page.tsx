@@ -1,297 +1,523 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "../AuthProvider";
 
-export default function DashboardPage() {
-  const { user, loading } = useAuth();
-  const router = useRouter();
+type StoryMedia = {
+  id?: number;
+  media_url?: string;
+  media_type?: string;
+};
 
-  // Protect this page – if not logged in, send to /login
+type StoryRowFromBackend = {
+  id?: number;
+  story_id?: number;
+
+  title: string;
+  description?: string;
+  location_tag?: string;
+
+  created_at?: string;
+
+  // backend returns these (flat)
+  user_id?: number;
+  user_name?: string;
+  user_email?: string;
+
+  media?: StoryMedia[];
+};
+
+type Story = {
+  id?: number;
+  title: string;
+  description?: string;
+  location_tag?: string;
+  created_at?: string;
+  user?: { name?: string; email?: string };
+  media?: StoryMedia[];
+};
+
+export default function DashboardPage() {
+  const router = useRouter();
+  const { user, loading, refreshUser } = useAuth();
+
+  // ✅ API base (no /api at the end)
+  const API_BASE = useMemo(
+    () => process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:5000",
+    []
+  );
+
+  const [stories, setStories] = useState<Story[]>([]);
+  const [fetchingStories, setFetchingStories] = useState(false);
+
+  // form state
+  const [title, setTitle] = useState("");
+  const [locationTag, setLocationTag] = useState("");
+  const [description, setDescription] = useState("");
+  const [files, setFiles] = useState<File[]>([]);
+  const [posting, setPosting] = useState(false);
+
+  // UI messages
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [successMsg, setSuccessMsg] = useState<string | null>(null);
+
+  // to reset the file input UI
+  const [fileInputKey, setFileInputKey] = useState(0);
+
+  const getToken = () => {
+    if (typeof window === "undefined") return "";
+    return localStorage.getItem("token") || "";
+  };
+
+  // redirect if not logged in
   useEffect(() => {
     if (!loading && !user) {
       router.replace("/login");
     }
   }, [loading, user, router]);
 
-  if (loading || (!user && typeof window !== "undefined")) {
+  const logout = async () => {
+    localStorage.removeItem("token");
+    await refreshUser();
+    router.replace("/login");
+  };
+
+  // ✅ normalize backend story row -> UI story
+  const normalizeStory = (row: StoryRowFromBackend): Story => {
+    return {
+      id: row.id ?? row.story_id,
+      title: row.title,
+      description: row.description,
+      location_tag: row.location_tag,
+      created_at: row.created_at,
+      user: {
+        name: row.user_name,
+        email: row.user_email,
+      },
+      media: Array.isArray(row.media) ? row.media : [],
+    };
+  };
+
+  // ✅ fix media URL:
+  // - Cloudinary returns https://...
+  // - local upload returns /uploads/...
+  const resolveMediaUrl = (url: string) => {
+    if (!url) return "";
+    if (url.startsWith("http://") || url.startsWith("https://")) return url;
+    if (url.startsWith("/")) return `${API_BASE}${url}`;
+    return url;
+  };
+
+  const fetchStories = async () => {
+    setFetchingStories(true);
+    setErrorMsg(null);
+
+    try {
+      // GET /api/stories is public in your backend
+      const res = await fetch(`${API_BASE}/api/stories`, {
+        method: "GET",
+        cache: "no-store",
+      });
+
+      if (!res.ok) {
+        const text = await res.text().catch(() => "");
+        throw new Error(
+          `Stories fetch failed (${res.status}). ${
+            text?.slice(0, 120) || "Check backend route /api/stories"
+          }`
+        );
+      }
+
+      const data = await res.json();
+      const list = Array.isArray(data) ? data : data?.stories || [];
+      const normalized = (list as StoryRowFromBackend[]).map(normalizeStory);
+
+      setStories(normalized);
+    } catch (e: any) {
+      setStories([]);
+      setErrorMsg(e?.message || "Failed to load stories");
+    } finally {
+      setFetchingStories(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!loading && user) fetchStories();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loading, user]);
+
+  const onFilesChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const selected = Array.from(e.target.files || []);
+    setFiles(selected.slice(0, 6));
+  };
+
+  const resetForm = () => {
+    setTitle("");
+    setLocationTag("");
+    setDescription("");
+    setFiles([]);
+    setFileInputKey((k) => k + 1); // resets input UI
+  };
+
+  const postStory = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setPosting(true);
+    setErrorMsg(null);
+    setSuccessMsg(null);
+
+    try {
+      const token = getToken();
+      if (!token) throw new Error("No token found. Please login again.");
+
+      if (!title.trim()) throw new Error("Title is required.");
+
+      const fd = new FormData();
+      fd.append("title", title.trim());
+      fd.append("location_tag", locationTag.trim());
+      fd.append("description", description.trim());
+
+      // ✅ IMPORTANT: backend expects "media"
+      files.forEach((file) => fd.append("media", file));
+
+      const res = await fetch(`${API_BASE}/api/stories`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          // ❌ DO NOT set Content-Type for FormData
+        },
+        body: fd,
+      });
+
+      const payloadText = await res.text().catch(() => "");
+      let payload: any = {};
+      try {
+        payload = payloadText ? JSON.parse(payloadText) : {};
+      } catch {
+        payload = { raw: payloadText };
+      }
+
+      if (!res.ok) {
+        throw new Error(
+          payload?.error ||
+            `Failed to post story (${res.status}). ${payloadText?.slice(0, 150)}`
+        );
+      }
+
+      setSuccessMsg("Story posted successfully ✅");
+      resetForm();
+      await fetchStories();
+    } catch (e: any) {
+      setErrorMsg(e?.message || "Failed to post story");
+    } finally {
+      setPosting(false);
+    }
+  };
+
+  if (loading || !user) {
     return (
-      <main className="min-h-screen flex items-center justify-center bg-slate-950 text-slate-100">
-        <p className="text-sm text-slate-300">
-          Loading your Echoes Of Nepal dashboard…
-        </p>
-      </main>
+      <div style={{ padding: 24, color: "#e5e7eb" }}>
+        Loading dashboard…
+      </div>
     );
   }
 
-  if (!user) {
-    // redirecting…
-    return null;
-  }
-
-  const firstName = user.name?.split(" ")[0] || "Traveler";
-
   return (
-    <main className="min-h-screen bg-slate-950 text-slate-50 flex">
-      {/* Sidebar */}
-      <aside className="hidden md:flex md:flex-col w-64 border-r border-slate-800 bg-slate-950/80">
-        <div className="px-6 py-5 border-b border-slate-800 flex items-center gap-2">
-          <div className="h-9 w-9 rounded-xl bg-orange-500/90 flex items-center justify-center text-xs font-bold tracking-tight shadow-lg shadow-orange-500/40">
-            EON
-          </div>
-          <div className="leading-tight">
-            <p className="text-sm font-semibold">Echoes Of Nepal</p>
-            <p className="text-[11px] text-slate-400">
-              Routes • Rides • Stories
+    <div style={{ padding: 24, color: "#e5e7eb" }}>
+      <div style={{ maxWidth: 1100, margin: "0 auto" }}>
+        <header
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            gap: 16,
+            alignItems: "flex-start",
+          }}
+        >
+          <div>
+            <h1 style={{ fontSize: 22, fontWeight: 800, marginBottom: 6 }}>
+              Echoes Of Nepal — Stories
+            </h1>
+            <p style={{ color: "#9ca3af", marginTop: 0 }}>
+              Share your journey. Explore stories from everyone.
             </p>
           </div>
-        </div>
 
-        <nav className="flex-1 px-3 py-4 space-y-1 text-sm">
-          <p className="px-3 text-[11px] uppercase tracking-[0.16em] text-slate-500 mb-1">
-            Overview
-          </p>
-          <button className="w-full flex items-center gap-2 px-3 py-2 rounded-lg bg-slate-800 text-slate-50 text-sm">
-            <span>🏔</span>
-            <span>Dashboard</span>
-          </button>
-          <button className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-slate-300 hover:bg-slate-900/80">
-            <span>🗺</span>
-            <span>My routes</span>
-          </button>
-          <button className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-slate-300 hover:bg-slate-900/80">
-            <span>⭐</span>
-            <span>Saved places</span>
-          </button>
+          <div style={{ textAlign: "right" }}>
+            <div style={{ fontWeight: 700 }}>{user?.name}</div>
+            <div style={{ color: "#9ca3af", fontSize: 13 }}>{user?.email}</div>
 
-          <p className="px-3 mt-4 text-[11px] uppercase tracking-[0.16em] text-slate-500 mb-1">
-            Trips
-          </p>
-          <button className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-slate-300 hover:bg-slate-900/80">
-            <span>🧭</span>
-            <span>Plan new trip</span>
-          </button>
-          <button className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-slate-300 hover:bg-slate-900/80">
-            <span>📅</span>
-            <span>Upcoming journeys</span>
-          </button>
-        </nav>
-
-        <div className="px-4 py-4 border-t border-slate-800 text-xs text-slate-400">
-          <p className="mb-1 font-medium text-slate-200">
-            {firstName}&apos;s account
-          </p>
-          <p className="truncate text-[11px]">{user.email}</p>
-        </div>
-      </aside>
-
-      {/* Main content area */}
-      <section className="flex-1 flex flex-col">
-        {/* Top bar */}
-        <header className="h-16 border-b border-slate-800 flex items-center justify-between px-4 md:px-8 bg-slate-950/80 backdrop-blur">
-          <div className="flex flex-col">
-            <span className="text-xs uppercase tracking-[0.18em] text-orange-400">
-              Dashboard
-            </span>
-            <span className="text-sm text-slate-300">
-              Namaste, {firstName}. Ready for your next journey?
-            </span>
-          </div>
-
-          <div className="flex items-center gap-3">
-            <button className="hidden sm:inline-flex items-center gap-1 rounded-full border border-slate-700 px-3 py-1.5 text-xs text-slate-200 hover:bg-slate-800">
-              <span>+</span>
-              <span>New trip</span>
+            <button
+              onClick={logout}
+              style={{
+                marginTop: 10,
+                background: "transparent",
+                border: "1px solid rgba(148,163,184,0.35)",
+                color: "#e5e7eb",
+                padding: "8px 12px",
+                borderRadius: 10,
+                cursor: "pointer",
+              }}
+            >
+              Logout
             </button>
-            <div className="h-8 w-8 rounded-full bg-gradient-to-tr from-orange-500 to-amber-300 text-xs font-semibold flex items-center justify-center text-slate-950">
-              {firstName[0]?.toUpperCase() || "T"}
-            </div>
           </div>
         </header>
 
-        {/* Scrollable content */}
-        <div className="flex-1 overflow-y-auto px-4 md:px-8 py-6 space-y-6 bg-[radial-gradient(circle_at_top,_rgba(248,250,252,0.06),_transparent_55%),_linear-gradient(to_bottom,_#020617,_#020617)]">
-          {/* Top cards */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <div className="rounded-2xl border border-slate-800 bg-slate-900/70 p-4 flex flex-col justify-between">
-              <div>
-                <p className="text-xs text-slate-400 mb-1">
-                  Next recommended escape
-                </p>
-                <p className="text-sm font-semibold text-slate-50">
-                  Weekend loop around Nagarkot & Dhulikhel
-                </p>
-                <p className="text-xs text-slate-400 mt-2">
-                  Curvy roads, sunrise viewpoints and tea stops.
-                </p>
-              </div>
-              <button className="mt-3 self-start text-[11px] px-3 py-1.5 rounded-full bg-orange-500 text-slate-950 font-medium hover:bg-orange-400">
-                View suggestion
-              </button>
+        {/* Create story card */}
+        <div
+          className="eon-auth-card"
+          style={{ marginTop: 18, maxWidth: "100%", padding: 18 }}
+        >
+          <h2 style={{ fontSize: 18, fontWeight: 800, marginBottom: 6 }}>
+            Create a story
+          </h2>
+          <p style={{ color: "#9ca3af", marginTop: 0, marginBottom: 12 }}>
+            Share your journey — photos, videos, and a short caption.
+          </p>
+
+          {errorMsg && (
+            <div
+              style={{
+                background: "rgba(220,38,38,0.12)",
+                border: "1px solid rgba(220,38,38,0.35)",
+                padding: 12,
+                borderRadius: 12,
+                marginBottom: 12,
+                color: "#fecaca",
+                fontWeight: 700,
+              }}
+            >
+              {errorMsg}
+            </div>
+          )}
+
+          {successMsg && (
+            <div
+              style={{
+                background: "rgba(34,197,94,0.10)",
+                border: "1px solid rgba(34,197,94,0.30)",
+                padding: 12,
+                borderRadius: 12,
+                marginBottom: 12,
+                color: "#bbf7d0",
+                fontWeight: 700,
+              }}
+            >
+              {successMsg}
+            </div>
+          )}
+
+          <form onSubmit={postStory} className="eon-form" style={{ gap: 12 }}>
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "1fr 1fr",
+                gap: 12,
+              }}
+            >
+              <label>
+                <span>Story title</span>
+                <input
+                  value={title}
+                  onChange={(e) => setTitle(e.target.value)}
+                  placeholder="Snowfall near Shivapuri"
+                  required
+                />
+              </label>
+
+              <label>
+                <span>Location tag</span>
+                <input
+                  value={locationTag}
+                  onChange={(e) => setLocationTag(e.target.value)}
+                  placeholder="Shivapuri"
+                />
+              </label>
             </div>
 
-            <div className="rounded-2xl border border-slate-800 bg-slate-900/70 p-4">
-              <p className="text-xs text-slate-400 mb-1">
-                This month&apos;s activity
-              </p>
-              <p className="text-2xl font-semibold text-slate-50 mb-1">
-                4 rides
-              </p>
-              <p className="text-xs text-slate-400">
-                You explored approx. <span className="font-medium">327 km</span>{" "}
-                of Nepali roads. Keep the wheels moving.
-              </p>
-            </div>
-
-            <div className="rounded-2xl border border-slate-800 bg-slate-900/70 p-4">
-              <p className="text-xs text-slate-400 mb-1">Saved spots</p>
-              <p className="text-2xl font-semibold text-slate-50 mb-1">
-                9 places
-              </p>
-              <p className="text-xs text-slate-400">
-                Your map is starting to look like a constellation.
-              </p>
-            </div>
-          </div>
-
-          {/* Middle section: map + AI suggestions */}
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-            {/* Map placeholder */}
-            <div className="lg:col-span-2 rounded-2xl border border-slate-800 bg-slate-900/60 p-4 flex flex-col">
-              <div className="flex items-center justify-between mb-3">
-                <div>
-                  <p className="text-xs text-slate-400">Your routes</p>
-                  <p className="text-sm font-medium text-slate-50">
-                    Recently explored in Nepal
-                  </p>
-                </div>
-                <button className="text-[11px] px-3 py-1.5 rounded-full border border-slate-700 hover:bg-slate-800 text-slate-200">
-                  Open full map
-                </button>
-              </div>
-
-              <div className="flex-1 rounded-xl border border-slate-800 bg-[radial-gradient(circle_at_top,_rgba(248,250,252,0.08),_transparent_60%),_linear-gradient(135deg,_#020617,_#020617)] flex items-center justify-center text-xs text-slate-400">
-                <div className="text-center px-6">
-                  <p className="mb-2">
-                    🗺 Interactive trip map coming soon.
-                  </p>
-                  <p>
-                    For now, this area will preview your planned routes and
-                    completed journeys.
-                  </p>
-                </div>
-              </div>
-            </div>
-
-            {/* AI helper card */}
-            <div className="rounded-2xl border border-orange-500/50 bg-slate-900/80 p-4 flex flex-col">
-              <p className="text-xs text-orange-300 mb-1">Echoes AI guide</p>
-              <p className="text-sm font-semibold text-slate-50 mb-2">
-                Ask for a custom route inside Nepal
-              </p>
-              <p className="text-xs text-slate-300 mb-3">
-                Tell Echoes AI how many days you have, your bike or trek level,
-                and it will suggest a route.
-              </p>
+            <label>
+              <span>Description</span>
               <textarea
-                className="min-h-[80px] rounded-xl border border-slate-700 bg-slate-950/70 text-xs text-slate-100 px-3 py-2 outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/40"
-                placeholder="Example: 3 days, intermediate rider, starting from Kathmandu, want a mix of highway and light off-road with mountain views."
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+                placeholder="Write something about your journey..."
+                rows={4}
+                style={{
+                  borderRadius: 14,
+                  border: "1px solid #4b5563",
+                  padding: "10px 12px",
+                  background: "rgba(15,23,42,0.95)",
+                  color: "#e5e7eb",
+                  outline: "none",
+                }}
               />
-              <button className="mt-3 w-full text-[11px] px-3 py-2 rounded-full bg-orange-500 text-slate-950 font-medium hover:bg-orange-400">
-                Generate route idea
-              </button>
-            </div>
-          </div>
+            </label>
 
-          {/* Bottom section: upcoming trips + recent activity */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-            {/* Upcoming trips */}
-            <div className="rounded-2xl border border-slate-800 bg-slate-900/70 p-4">
-              <div className="flex items-center justify-between mb-3">
-                <p className="text-sm font-semibold text-slate-50">
-                  Upcoming journeys
-                </p>
-                <button className="text-[11px] text-slate-300 hover:text-slate-100">
-                  View all
-                </button>
-              </div>
-              <ul className="space-y-2 text-xs text-slate-300">
-                <li className="flex items-center justify-between rounded-xl border border-slate-800 bg-slate-900/80 px-3 py-2">
-                  <div>
-                    <p className="font-medium text-slate-50">
-                      Manang – Weekend escape
-                    </p>
-                    <p className="text-[11px] text-slate-400">
-                      Tentative · Next month · 3 days
-                    </p>
-                  </div>
-                  <span className="text-[11px] px-2.5 py-1 rounded-full bg-slate-800 text-slate-200">
-                    Draft
-                  </span>
-                </li>
-                <li className="flex items-center justify-between rounded-xl border border-slate-800 bg-slate-900/80 px-3 py-2">
-                  <div>
-                    <p className="font-medium text-slate-50">
-                      Kathmandu valley sunset loop
-                    </p>
-                    <p className="text-[11px] text-slate-400">
-                      Saturday · 1 day · Easy pace
-                    </p>
-                  </div>
-                  <span className="text-[11px] px-2.5 py-1 rounded-full bg-emerald-500/15 text-emerald-300 border border-emerald-500/40">
-                    Planned
-                  </span>
-                </li>
-              </ul>
-            </div>
+            <label>
+              <span>Media (max 6)</span>
+              <input
+                key={fileInputKey}
+                type="file"
+                multiple
+                accept="image/*,video/*"
+                onChange={onFilesChange}
+              />
 
-            {/* Recent activity */}
-            <div className="rounded-2xl border border-slate-800 bg-slate-900/70 p-4">
-              <div className="flex items-center justify-between mb-3">
-                <p className="text-sm font-semibold text-slate-50">
-                  Recent activity
-                </p>
-                <button className="text-[11px] text-slate-300 hover:text-slate-100">
-                  View log
-                </button>
+              <div style={{ color: "#9ca3af", fontSize: 13, marginTop: 6 }}>
+                Selected: {files.length} / 6
               </div>
-              <ul className="space-y-2 text-xs text-slate-300">
-                <li className="flex items-center justify-between rounded-xl bg-slate-900/80 px-3 py-2">
-                  <div>
-                    <p className="font-medium text-slate-50">
-                      Added &quot;Kalinchowk snow ride&quot; to saved routes
-                    </p>
-                    <p className="text-[11px] text-slate-400">
-                      2 hours ago · Distance: 160 km
-                    </p>
-                  </div>
-                </li>
-                <li className="flex items-center justify-between rounded-xl bg-slate-900/80 px-3 py-2">
-                  <div>
-                    <p className="font-medium text-slate-50">
-                      Marked &quot;Mailung waterfall loop&quot; as completed
-                    </p>
-                    <p className="text-[11px] text-slate-400">
-                      Yesterday · Mixed off-road
-                    </p>
-                  </div>
-                </li>
-                <li className="flex items-center justify-between rounded-xl bg-slate-900/80 px-3 py-2">
-                  <div>
-                    <p className="font-medium text-slate-50">
-                      Saved &quot;Pokhara lakeside evening walk&quot;
-                    </p>
-                    <p className="text-[11px] text-slate-400">
-                      3 days ago · Easy walk
-                    </p>
-                  </div>
-                </li>
-              </ul>
-            </div>
-          </div>
+            </label>
+
+            <button
+              type="submit"
+              className="eon-submit-btn"
+              disabled={posting}
+              style={{ width: 180, alignSelf: "flex-end" }}
+            >
+              {posting ? "Posting..." : "Post story"}
+            </button>
+          </form>
         </div>
-      </section>
-    </main>
+
+        {/* Stories list */}
+        <div
+          className="eon-auth-card"
+          style={{ marginTop: 18, maxWidth: "100%", padding: 18 }}
+        >
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+              gap: 12,
+            }}
+          >
+            <div>
+              <h2 style={{ fontSize: 18, fontWeight: 800, marginBottom: 6 }}>
+                Latest stories
+              </h2>
+              <p style={{ color: "#9ca3af", marginTop: 0 }}>
+                Explore stories from everyone.
+              </p>
+            </div>
+
+            <button
+              onClick={fetchStories}
+              style={{
+                background: "transparent",
+                border: "1px solid rgba(148,163,184,0.35)",
+                color: "#e5e7eb",
+                padding: "8px 12px",
+                borderRadius: 10,
+                cursor: "pointer",
+              }}
+              disabled={fetchingStories}
+            >
+              {fetchingStories ? "Refreshing..." : "Refresh"}
+            </button>
+          </div>
+
+          {fetchingStories ? (
+            <p style={{ color: "#9ca3af" }}>Loading stories…</p>
+          ) : stories.length === 0 ? (
+            <p style={{ color: "#9ca3af" }}>No stories yet. Post the first one 👀</p>
+          ) : (
+            <div style={{ display: "grid", gap: 12 }}>
+              {stories.map((s, idx) => {
+                const key = String(s.id || idx);
+                const when = s.created_at;
+
+                return (
+                  <div
+                    key={key}
+                    style={{
+                      border: "1px solid rgba(148,163,184,0.25)",
+                      borderRadius: 14,
+                      padding: 14,
+                      background: "rgba(2,6,23,0.30)",
+                    }}
+                  >
+                    <div
+                      style={{
+                        display: "flex",
+                        justifyContent: "space-between",
+                        gap: 12,
+                      }}
+                    >
+                      <div>
+                        <div style={{ fontWeight: 900, fontSize: 16 }}>
+                          {s.title}
+                        </div>
+                        <div style={{ color: "#9ca3af", fontSize: 13, marginTop: 2 }}>
+                          {s.location_tag ? `📍 ${s.location_tag}` : ""}
+                          {s.location_tag && when ? " • " : ""}
+                          {when ? new Date(when).toLocaleString() : ""}
+                        </div>
+                      </div>
+
+                      <div style={{ color: "#9ca3af", fontSize: 13, textAlign: "right" }}>
+                        <div style={{ fontWeight: 800, color: "#e5e7eb" }}>
+                          {s.user?.name || "Unknown"}
+                        </div>
+                        <div>{s.user?.email || ""}</div>
+                      </div>
+                    </div>
+
+                    {s.description && (
+                      <p style={{ marginTop: 10, color: "#e5e7eb" }}>
+                        {s.description}
+                      </p>
+                    )}
+
+                    {Array.isArray(s.media) && s.media.length > 0 && (
+                      <div
+                        style={{
+                          marginTop: 10,
+                          display: "flex",
+                          gap: 10,
+                          flexWrap: "wrap",
+                        }}
+                      >
+                        {s.media.slice(0, 6).map((m, i) => {
+                          const rawUrl = m.media_url || "";
+                          const url = resolveMediaUrl(rawUrl);
+                          const type = m.media_type || "";
+
+                          if (!url) return null;
+
+                          const isVideo =
+                            type === "video" || /\.(mp4|webm|mov)$/i.test(url);
+
+                          return isVideo ? (
+                            <video
+                              key={i}
+                              src={url}
+                              controls
+                              style={{ width: 220, borderRadius: 12 }}
+                            />
+                          ) : (
+                            <img
+                              key={i}
+                              src={url}
+                              alt="story media"
+                              style={{
+                                width: 220,
+                                height: 160,
+                                borderRadius: 12,
+                                objectFit: "cover",
+                              }}
+                            />
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
   );
 }
